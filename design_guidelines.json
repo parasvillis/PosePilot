@@ -1,0 +1,167 @@
+{
+  "project_info": {
+    "name": "PosePilot",
+    "description": "Real-time AI-powered camera app for photo posing.",
+    "theme": "dark",
+    "archetype": "Archetype 4 (Swiss & High-Contrast) + Archetype 2 (Performance Pro) - Minimal Camera Utility"
+  },
+  "colors": {
+    "background_primary": "#000000",
+    "background_secondary": "#121212",
+    "surface": "rgba(28, 28, 30, 0.7)",
+    "surface_solid": "#1C1C1E",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "rgba(235, 235, 245, 0.6)",
+    "accent": "#FFD60A",
+    "accent_foreground": "#000000",
+    "success": "#32D74B",
+    "error": "#FF453A",
+    "border": "rgba(255, 255, 255, 0.15)",
+    "overlay": "rgba(0, 0, 0, 0.6)"
+  },
+  "typography": {
+    "font_family_primary": "System",
+    "font_family_secondary": "System",
+    "headings": {
+      "h1": { "size": 34, "weight": "800", "tracking": -0.4, "lineHeight": 41 },
+      "h2": { "size": 28, "weight": "700", "tracking": -0.3, "lineHeight": 34 },
+      "h3": { "size": 22, "weight": "600", "tracking": -0.2, "lineHeight": 28 }
+    },
+    "body": {
+      "large": { "size": 17, "weight": "400", "tracking": -0.1, "lineHeight": 22 },
+      "medium": { "size": 15, "weight": "400", "tracking": 0, "lineHeight": 20 },
+      "small": { "size": 13, "weight": "500", "tracking": 0.1, "lineHeight": 18 },
+      "mono": { "size": 15, "weight": "600", "tracking": 0.5, "family": "System" }
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "xxl": 48
+  },
+  "radii": {
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "pill": 9999
+  },
+  "shadows": {
+    "hud": "0px 4px 12px rgba(0,0,0,0.3)"
+  },
+  "effects": {
+    "blur": "regular"
+  },
+  "motion": {
+    "spring_carousel": { "stiffness": 300, "damping": 20 },
+    "timing_fade": { "duration": 200 },
+    "ring_pulse": { "duration": 1000 }
+  },
+  "icons": {
+    "library": "@expo/vector-icons/Ionicons",
+    "sizes": {
+      "sm": 16,
+      "md": 24,
+      "lg": 32,
+      "xl": 48
+    },
+    "color": "#FFFFFF"
+  },
+  "components": {
+    "CameraHUD": {
+      "layout": "absolute, top-0, left-0, right-0, bottom-0, z-index-10",
+      "top_bar": "flex-row, justify-between, items-center, pt-safe, px-16",
+      "bottom_controls": "absolute, bottom-0, left-0, right-0, pb-safe, items-center"
+    },
+    "PoseCarousel": {
+      "container": "w-full, h-100, flex-row, justify-center",
+      "item": "w-64, h-80, rounded-12, overflow-hidden, mx-8",
+      "selected_state": "border-2, border-accent, opacity-100",
+      "unselected_state": "opacity-50, scale-90"
+    },
+    "ScoreMeter": {
+      "container": "absolute, center-overlay around capture button",
+      "ring_size": 84,
+      "thickness": 4,
+      "states": {
+        "waiting": "color-white-opacity-30",
+        "aligning": "color-accent",
+        "matched": "color-success (>= 85%)"
+      }
+    },
+    "FeedbackToast": {
+      "container": "bg-surface, backdrop-blur-md, rounded-pill, px-16, py-8, mb-16",
+      "text": "body.small, color-white, text-center",
+      "animation": "slide-up and fade-in/out"
+    },
+    "CaptureButton": {
+      "outer_ring": "w-72, h-72, rounded-pill, border-4, border-white",
+      "inner_circle": "w-56, h-56, rounded-pill, bg-white",
+      "pressed_state": "inner_circle scale-90"
+    },
+    "GhostOverlay": {
+      "svg": "absolute, w-full, h-full, pointer-events-none",
+      "path": "stroke-white, stroke-width-2, stroke-dasharray-[8,8]",
+      "opacity": "controlled by slider, default 0.4"
+    },
+    "OpacitySlider": {
+      "container": "absolute, right-16, top-1/3, h-150, w-32, items-center",
+      "track": "w-4, h-full, bg-white-opacity-20, rounded-pill",
+      "thumb": "w-16, h-16, bg-white, rounded-pill, shadow-hud"
+    },
+    "OnboardingCard": {
+      "container": "bg-surface_solid, rounded-24, p-24, w-full, shadow-hud",
+      "image": "w-full, h-200, rounded-16, mb-24, bg-background_secondary",
+      "title": "h2, mb-8, text-center",
+      "subtitle": "body.medium, text_secondary, text-center, mb-24",
+      "button": "bg-accent, rounded-pill, py-16, items-center"
+    },
+    "GalleryGrid": {
+      "container": "bg-background_primary, flex-1",
+      "header": "pt-safe, px-16, pb-16, border-b, border-border",
+      "grid": "flex-row, flex-wrap, gap-2",
+      "item": "w-33%, aspect-square, bg-background_secondary"
+    },
+    "BeforeAfterPreview": {
+      "container": "bg-background_primary, flex-1, relative",
+      "image_container": "w-full, flex-1",
+      "slider_line": "absolute, w-2, h-full, bg-white, items-center, justify-center",
+      "slider_thumb": "w-32, h-32, rounded-pill, bg-white, shadow-hud, items-center, justify-center"
+    }
+  },
+  "image_urls": [
+    {
+      "category": "onboarding_1",
+      "description": "Fashion model standing casually in studio - represents posing templates",
+      "url": "https://images.unsplash.com/photo-1768696082603-5b7a9f0a10ab?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHw0fHxmYXNoaW9uJTIwbW9kZWwlMjBjYXN1YWwlMjBwb3NlJTIwc3R1ZGlvfGVufDB8fHx8MTc3NjQxNDA1NXww&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "onboarding_2",
+      "description": "Minimalist aesthetic photography - represents final photo quality",
+      "url": "https://images.unsplash.com/photo-1759363296470-425ededf8163?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwyfHxtaW5pbWFsaXN0JTIwYWVzdGhldGljJTIwcGVyc29uJTIwcGhvdG9ncmFwaHl8ZW58MHx8fHwxNzc2NDE0MDYwfDA&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "onboarding_3",
+      "description": "Woman sitting casually in a chair - represents sitting pose templates",
+      "url": "https://images.unsplash.com/photo-1748244191096-9c6ccbf7eb10?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwzfHxtaW5pbWFsaXN0JTIwYWVzdGhldGljJTIwcGVyc29uJTIwcGhvdG9ncmFwaHl8ZW58MHx8fHwxNzc2NDE0MDYwfDA&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "gallery_preview",
+      "description": "Person on dock looking at sunset - represents captured gallery photos",
+      "url": "https://images.unsplash.com/photo-1770347253974-a394485178b9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHw0fHxtaW5pbWFsaXN0JTIwYWVzdGhldGljJTIwcGVyc29uJTIwcGhvdG9ncmFwaHl8ZW58MHx8fHwxNzc2NDE0MDYwfDA&ixlib=rb-4.1.0&q=85"
+    }
+  ],
+  "testing": {
+    "attribute": "testID",
+    "convention": "kebab-case, role-based"
+  },
+  "instructions_to_main_agent": [
+    "Use pure dark mode (#000000 base) with #FFD60A for active tracking elements and #32D74B for match-success states.",
+    "Camera HUD must be completely transparent to avoid obstructing the viewfinder. Use `rgba(28, 28, 30, 0.7)` with blur for floating controls.",
+    "The pose carousel unselected items must scale down (0.9) and drop opacity to 50% to maintain a minimal feel.",
+    "Rely exclusively on @expo/vector-icons/Ionicons (no emojis) for UI iconography.",
+    "Provide `testID` props for all interactive items (capture button, carousel items, sliders)."
+  ]
+}
