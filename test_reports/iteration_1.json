@@ -1,0 +1,82 @@
+{
+  "summary": "Frontend-only testing of PosePilot Expo React Native camera app. Core functionality works but CRITICAL auto-capture timing bug prevents user interaction. Camera screen loads correctly with all HUD elements, pose selection works, manual capture works, navigation works. Main issue: auto-capture fires within 500ms of camera load (instead of ~5s as designed), creating infinite capture loop.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Preview screen - Before/After toggle",
+        "issue": "Toggle buttons (preview-mode-before/after) are outside viewport on mobile (375x667), cannot be clicked",
+        "testID": "preview-mode-before, preview-mode-after",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "Library screen - Pose cards",
+        "issue": "Pose illustration SVGs not rendering in library cards (black boxes shown instead of pose skeletons)",
+        "testID": "library-card-*",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Camera screen auto-capture",
+        "issue": "CRITICAL: Auto-capture fires within 500ms of camera screen loading instead of ~5s. Simulated detector starts with 95% match score, reaches 85% threshold almost immediately. Users cannot interact with camera before being auto-captured to preview. Creates infinite loop: camera loads → auto-capture at 500ms → preview → camera continues running in background → auto-capture again at 3s → new preview. Multiple captures created every 3 seconds.",
+        "affected_testIDs": ["camera-screen", "capture-button", "toggle-auto"],
+        "root_cause": "Simulated detector's initial pose (shiftedInitialPose) is only 5% offset from target, resulting in 95% match immediately. Auto-capture enabled by default with no grace period.",
+        "reproduction_steps": [
+          "1. Navigate to /camera",
+          "2. Camera screen visible for <500ms",
+          "3. Auto-capture fires, navigates to /preview",
+          "4. Camera detection loop continues in background",
+          "5. Auto-capture fires again every ~3s"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "Multiple components",
+        "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents' - appears on multiple screens"
+      }
+    ]
+  },
+  "test_report_links": [
+    "/tmp/01_splash.png - Splash screen with PosePilot branding",
+    "/tmp/02_onboarding_page1.png - Onboarding page 1: Pick a pose",
+    "/tmp/03_onboarding_page2.png - Onboarding page 2: Match the outline",
+    "/tmp/04_onboarding_page3.png - Onboarding page 3: Auto-shutter at 85%",
+    "/tmp/camera_direct_immediate.png - Camera screen visible briefly (score 95)",
+    "/tmp/final_pose_selection.png - Camera with Arms Wide pose selected (score 71)",
+    "/tmp/final_library.png - Library screen with 10 pose cards",
+    "/tmp/final_preview.png - Preview screen showing Arms Wide Match 83/100"
+  ],
+  "action_items": [
+    "FIX CRITICAL: Add 3-5 second grace period before auto-capture can fire after camera screen mounts",
+    "FIX CRITICAL: Ensure camera detection loop stops when navigating away from camera screen (check useEffect cleanup)",
+    "FIX CRITICAL: Make simulated detector's initial pose more different from target (larger offset or different starting pose) to achieve realistic 30→90 score progression over 5 seconds",
+    "FIX MEDIUM: Adjust preview screen layout so Before/After toggle buttons are within mobile viewport (375x667)",
+    "FIX LOW: Investigate why pose SVGs not rendering in library cards",
+    "FIX LOW: Update deprecated props.pointerEvents to style.pointerEvents",
+    "VERIFY: Test auto-capture behavior after fixes - should take ~5-6 seconds from camera load to auto-capture",
+    "VERIFY: Test that only ONE capture is created per auto-capture trigger"
+  ],
+  "critical_code_review_comments": [
+    "camera.tsx line 101-107: Auto-capture logic has no grace period after mount, fires immediately when score ≥ 85",
+    "camera.tsx line 83-114: Detection loop useEffect has stableSince in dependency array, causing effect to re-run when stableSince changes - this may cause timing issues",
+    "detector.ts line 75-85: shiftedInitialPose only offsets by 0.05x and 0.03y from target, resulting in 95% match immediately instead of starting at ~30%",
+    "camera.tsx line 60: Detector created with useRef().current pattern - verify this doesn't cause state persistence issues",
+    "preview.tsx: Before/After toggle buttons positioned outside mobile viewport - needs layout adjustment for 375px width"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A - no backend testing required",
+    "frontend": "70% - Core features work but critical auto-capture bug blocks normal usage. With auto-capture disabled, all features work correctly."
+  },
+  "seed_data_creation": "No seed data created. App uses AsyncStorage for persistence. Multiple test captures were created during testing due to auto-capture bug.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Auto-capture bug is the main blocker. To test effectively: (1) Navigate directly to /camera, (2) Immediately click toggle-auto to disable auto-capture within 200ms, (3) Then test other features. Or wait for main agent to fix the grace period issue. All other features (pose selection, library, gallery, preview, settings) work correctly when auto-capture is disabled.",
+  "rca_of_issue": "ROOT CAUSE: Simulated detector convergence timing mismatch. DESIGN INTENT: Score should ramp from ~30 to 90+ over ~5 seconds, giving users time to adjust pose. ACTUAL BEHAVIOR: Detector starts at 95% match (shiftedInitialPose is too similar to target), reaches 85% threshold within 500ms. CONTRIBUTING FACTORS: (1) No grace period after camera mount, (2) Auto-capture enabled by default, (3) Initial pose offset too small (5% vs needed ~40-50% for realistic progression). IMPACT: Users cannot interact with camera before auto-capture fires. Camera continues running after navigation, creating infinite capture loop. MITIGATION: Add 3-5s grace period OR increase initial pose offset OR disable auto-capture by default."
+}
