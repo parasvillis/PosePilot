@@ -18,10 +18,17 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 
 import { colors, spacing, radii, typography } from '../src/theme';
 import { POSE_TEMPLATES, getTemplateById } from '../src/pose/templates';
-import { createSimulatedDetector, PoseDetector } from '../src/pose/detector';
+import { createPoseDetector } from '../src/pose/factory';
+import { PoseDetector } from '../src/pose/detector';
 import { matchPoses } from '../src/pose/matcher';
 import { generateHint, scoreLabel } from '../src/pose/feedback';
-import { addCapture, getSettings, setSettings, Settings, DEFAULT_SETTINGS } from '../src/storage/gallery';
+import {
+  addCapture,
+  getSettings,
+  setSettings,
+  Settings,
+  DEFAULT_SETTINGS,
+} from '../src/storage/gallery';
 import PoseOverlay from '../src/components/PoseOverlay';
 import ScoreMeter from '../src/components/ScoreMeter';
 import PoseCarousel from '../src/components/PoseCarousel';
@@ -29,6 +36,12 @@ import FeedbackToast from '../src/components/FeedbackToast';
 import CaptureButton from '../src/components/CaptureButton';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
+const IS_WEB = Platform.OS === 'web';
+
+type DetectorState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; detector: PoseDetector }
+  | { kind: 'unavailable'; reason: string };
 
 export default function CameraScreen() {
   const router = useRouter();
@@ -36,88 +49,135 @@ export default function CameraScreen() {
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
+  const videoHostRef = useRef<View>(null);
   const [facing, setFacing] = useState<CameraType>('back');
   const [selectedPoseId, setSelectedPoseId] = useState<string>(
     (typeof params.pose === 'string' && params.pose) || POSE_TEMPLATES[0].id,
   );
-
-  // Sync selected pose when route param changes (coming back from library)
-  useEffect(() => {
-    if (typeof params.pose === 'string' && params.pose && params.pose !== selectedPoseId) {
-      setSelectedPoseId(params.pose);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.pose]);
+  const [detectorState, setDetectorState] = useState<DetectorState>({ kind: 'loading' });
   const [score, setScore] = useState(0);
+  const [hasPose, setHasPose] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [worstJoints, setWorstJoints] = useState<Set<string>>(new Set());
-  const [stableSince, setStableSince] = useState<number | null>(null);
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [capturing, setCapturing] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const [settings, setSettingsState] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
 
-  const detector = useRef<PoseDetector>(createSimulatedDetector()).current;
   const target = useMemo(() => getTemplateById(selectedPoseId).pose, [selectedPoseId]);
-  const [frameTick, setFrameTick] = useState(0);
+  const mountedAt = useRef(Date.now());
+  const stableSince = useRef<number | null>(null);
 
-  // Load settings
+  // Load settings from storage
   useEffect(() => {
     getSettings().then(s => setSettingsState(s));
   }, []);
 
-  // Permissions
+  // Permission request (native)
   useEffect(() => {
-    if (permission && !permission.granted && permission.canAskAgain) {
+    if (!IS_WEB && permission && !permission.granted && permission.canAskAgain) {
       requestPermission();
     }
   }, [permission, requestPermission]);
 
-  // Reset detector when target changes
+  // Sync pose id from route param
   useEffect(() => {
-    detector.setTarget(selectedPoseId);
-    setStableSince(null);
-  }, [selectedPoseId, detector]);
+    if (typeof params.pose === 'string' && params.pose && params.pose !== selectedPoseId) {
+      setSelectedPoseId(params.pose);
+      stableSince.current = null;
+      mountedAt.current = Date.now();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.pose]);
 
-  // Detection + matching loop (~20Hz)
+  // Reset stability timer when user changes pose
   useEffect(() => {
+    stableSince.current = null;
+    mountedAt.current = Date.now();
+  }, [selectedPoseId]);
+
+  // Create detector once
+  useEffect(() => {
+    let cancelled = false;
+    let created: PoseDetector | null = null;
+    (async () => {
+      const res = await createPoseDetector(facing === 'front' ? 'front' : 'back');
+      if (cancelled) {
+        if (res.ok) await res.detector.stop();
+        return;
+      }
+      if (res.ok) {
+        created = res.detector;
+        setDetectorState({ kind: 'ready', detector: res.detector });
+      } else {
+        setDetectorState({ kind: 'unavailable', reason: res.reason });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (created) void created.stop();
+    };
+    // We intentionally only create once — changing facing will stop+start in a separate effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // On web, mount the detector's <video> into our host
+  useEffect(() => {
+    if (!IS_WEB) return;
+    if (detectorState.kind !== 'ready') return;
+    const host = videoHostRef.current as unknown as HTMLElement | null;
+    if (!host) return;
+    const det: any = detectorState.detector;
+    if (det && typeof det.mountInto === 'function') {
+      det.mountInto(host);
+    }
+  }, [detectorState]);
+
+  // Matching loop — ~20Hz
+  useEffect(() => {
+    if (detectorState.kind !== 'ready') return;
+    const det = detectorState.detector;
     let last = Date.now();
     const id = setInterval(() => {
       const now = Date.now();
-      const dt = (now - last) / 1000;
       last = now;
-      detector.tick(dt);
-      const user = detector.currentPose();
+      const user = det.currentPose();
+      if (!user) {
+        setHasPose(false);
+        setScore(0);
+        setHint('Step into frame — no body detected');
+        setWorstJoints(new Set());
+        stableSince.current = null;
+        return;
+      }
+      setHasPose(true);
       const m = matchPoses(user, target);
       setScore(m.score);
-      const nextHint = generateHint(user, target, m);
-      setHint(nextHint);
-      setWorstJoints(
-        new Set(m.jointDiffs.filter(j => j.diff > 0.25).map(j => j.name))
-      );
-      setFrameTick(t => t + 1);
+      setHint(generateHint(user, target, m));
+      setWorstJoints(new Set(m.jointDiffs.filter(j => j.diff > 0.25).map(j => j.name)));
 
-      // Auto-capture stability tracking
-      if (settings.autoCapture && m.score >= 85 && !capturing && countdown == null) {
-        if (stableSince == null) {
-          setStableSince(now);
-        } else if (now - stableSince >= 1000) {
-          setStableSince(null);
+      // Auto-capture stability
+      const elapsedSinceMount = now - mountedAt.current;
+      const graceOk = elapsedSinceMount > 3000; // 3s grace after mount/pose change
+      if (settings.autoCapture && graceOk && m.score >= 85 && !capturing && countdown == null) {
+        if (stableSince.current == null) {
+          stableSince.current = now;
+        } else if (now - stableSince.current >= 1000) {
+          stableSince.current = null;
           void triggerCapture(true);
         }
       } else if (m.score < 80) {
-        setStableSince(null);
+        stableSince.current = null;
       }
     }, 50);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, settings.autoCapture, capturing, countdown, stableSince]);
+  }, [detectorState, target, settings.autoCapture, capturing, countdown]);
 
-  const currentUserPose = detector.currentPose();
+  const currentUserPose = detectorState.kind === 'ready' ? detectorState.detector.currentPose() : null;
 
   async function triggerCapture(auto = false) {
     if (capturing) return;
-    // Timer
     if (!auto && settings.timer > 0) {
       for (let i = settings.timer; i > 0; i--) {
         setCountdown(i);
@@ -127,40 +187,46 @@ export default function CameraScreen() {
     }
     setCapturing(true);
     try {
-      if (settings.haptics) {
+      if (settings.haptics && !IS_WEB) {
         try {
           await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         } catch {}
       }
+
       let uri: string = '';
-      try {
-        const shot = await cameraRef.current?.takePictureAsync?.({
-          quality: 0.8,
-          base64: true,
-          skipProcessing: true,
-        } as any);
-        if (shot) {
-          uri = shot.base64 ? `data:image/jpeg;base64,${shot.base64}` : shot.uri;
+      if (IS_WEB && detectorState.kind === 'ready') {
+        const det: any = detectorState.detector;
+        if (typeof det.captureFrameDataURL === 'function') {
+          uri = det.captureFrameDataURL(0.85) ?? '';
         }
-      } catch {
-        uri = '';
+      } else if (!IS_WEB) {
+        try {
+          const shot = await cameraRef.current?.takePictureAsync?.({
+            quality: 0.8,
+            base64: true,
+            skipProcessing: true,
+          } as any);
+          if (shot) {
+            uri = shot.base64 ? `data:image/jpeg;base64,${shot.base64}` : shot.uri;
+          }
+        } catch {}
       }
-      // Fallback placeholder (web or denied): a 1x1 transparent gif
+
       if (!uri) {
-        uri =
-          'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A//2Q==';
+        uri = TINY_PLACEHOLDER;
       }
+
       const cap = {
         id: `cap_${Date.now()}`,
         poseId: selectedPoseId,
         poseName: getTemplateById(selectedPoseId).name,
         uri,
-        userPose: JSON.stringify(currentUserPose),
+        userPose: currentUserPose ? JSON.stringify(currentUserPose) : '',
         createdAt: Date.now(),
         score,
       };
       await addCapture(cap);
-      if (settings.haptics) {
+      if (settings.haptics && !IS_WEB) {
         try {
           await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         } catch {}
@@ -177,20 +243,24 @@ export default function CameraScreen() {
     void setSettings(next);
   }
 
-  const locked = score >= 85;
-  const hasCamera =
-    Platform.OS !== 'web' && permission?.granted;
+  const hasML = detectorState.kind === 'ready';
+  const locked = hasML && score >= 85;
+  const showNativeCamera =
+    !IS_WEB && permission?.granted;
 
   return (
     <View style={styles.root} testID="camera-screen">
-      {/* Camera / Fallback background */}
+      {/* Background — camera preview or faux */}
       <View style={StyleSheet.absoluteFill}>
-        {hasCamera ? (
-          <CameraView
-            ref={cameraRef}
-            style={StyleSheet.absoluteFill}
-            facing={facing}
+        {IS_WEB ? (
+          // Host div for the detector's managed <video>
+          <View
+            ref={videoHostRef}
+            testID="web-video-host"
+            style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }]}
           />
+        ) : showNativeCamera ? (
+          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} />
         ) : (
           <FauxPreview />
         )}
@@ -199,7 +269,7 @@ export default function CameraScreen() {
       {/* Grid */}
       {settings.grid && <GridOverlay />}
 
-      {/* Ghost pose overlay */}
+      {/* Ghost target pose */}
       <PoseOverlay
         pose={target}
         width={SCREEN_W}
@@ -209,18 +279,20 @@ export default function CameraScreen() {
         dashed
       />
 
-      {/* Detected user pose in accent */}
-      <PoseOverlay
-        pose={currentUserPose}
-        width={SCREEN_W}
-        height={SCREEN_H}
-        opacity={0.85}
-        stroke={locked ? colors.success : colors.accent}
-        dashed={false}
-        showPoints
-        highlight={worstJoints}
-        mirrored={facing === 'front'}
-      />
+      {/* Detected user pose — only when real detection is running */}
+      {hasML && currentUserPose && (
+        <PoseOverlay
+          pose={currentUserPose}
+          width={SCREEN_W}
+          height={SCREEN_H}
+          opacity={0.9}
+          stroke={locked ? colors.success : colors.accent}
+          dashed={false}
+          showPoints
+          highlight={worstJoints}
+          mirrored={false}
+        />
+      )}
 
       {/* Top HUD */}
       <SafeAreaView style={styles.topHud} edges={['top']} pointerEvents="box-none">
@@ -260,19 +332,37 @@ export default function CameraScreen() {
             }
             testID="toggle-timer"
           />
-          <HudChip
-            icon={settings.autoCapture ? 'flash' : 'flash-off-outline'}
-            label={settings.autoCapture ? 'Auto ON' : 'Auto OFF'}
-            onPress={() => updateSettings({ autoCapture: !settings.autoCapture })}
-            active={settings.autoCapture}
-            testID="toggle-auto"
-          />
+          {hasML && (
+            <HudChip
+              icon={settings.autoCapture ? 'flash' : 'flash-off-outline'}
+              label={settings.autoCapture ? 'Auto ON' : 'Auto OFF'}
+              onPress={() => updateSettings({ autoCapture: !settings.autoCapture })}
+              active={settings.autoCapture}
+              testID="toggle-auto"
+            />
+          )}
         </View>
+
+        {/* Honest mode banner */}
+        {detectorState.kind === 'unavailable' && (
+          <View style={styles.banner} testID="manual-mode-banner">
+            <Ionicons name="information-circle-outline" size={14} color={colors.accent} />
+            <Text style={styles.bannerText}>
+              Manual align mode · on-device AI needs an EAS dev-build
+            </Text>
+          </View>
+        )}
+        {detectorState.kind === 'loading' && (
+          <View style={styles.banner}>
+            <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+            <Text style={styles.bannerText}>Loading pose model…</Text>
+          </View>
+        )}
       </SafeAreaView>
 
       {/* Right-side opacity slider */}
       <View
-        style={[styles.opacityCol, { top: insets.top + 120 }]}
+        style={[styles.opacityCol, { top: insets.top + 140 }]}
         pointerEvents="box-none"
       >
         <Ionicons name="eye-outline" size={16} color={colors.textSecondary} />
@@ -291,7 +381,6 @@ export default function CameraScreen() {
         </View>
       </View>
 
-      {/* Big countdown */}
       {countdown != null && (
         <View style={styles.countdownWrap} pointerEvents="none">
           <Text style={styles.countdown}>{countdown}</Text>
@@ -301,7 +390,17 @@ export default function CameraScreen() {
       {/* Bottom HUD */}
       <SafeAreaView style={styles.bottomHud} edges={['bottom']}>
         <View style={styles.feedbackRow}>
-          <FeedbackToast message={locked ? scoreLabel(score) : hint} />
+          <FeedbackToast
+            message={
+              hasML
+                ? locked
+                  ? scoreLabel(score)
+                  : hasPose
+                    ? hint
+                    : 'Step into frame'
+                : 'Align your body with the outline'
+            }
+          />
         </View>
 
         <View style={styles.carouselWrap}>
@@ -328,7 +427,13 @@ export default function CameraScreen() {
           />
 
           <View style={styles.sideBtn}>
-            <ScoreMeter score={score} locked={locked} size={52} />
+            {hasML ? (
+              <ScoreMeter score={score} locked={locked} size={52} />
+            ) : (
+              <View style={styles.manualChip}>
+                <Text style={styles.manualChipText}>MANUAL</Text>
+              </View>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -341,11 +446,13 @@ export default function CameraScreen() {
         >
           <Pressable onPress={() => {}} style={styles.settingsSheet}>
             <Text style={styles.sheetTitle}>Settings</Text>
-            <SheetRow
-              label="Auto-capture"
-              value={settings.autoCapture}
-              onToggle={v => updateSettings({ autoCapture: v })}
-            />
+            {hasML && (
+              <SheetRow
+                label="Auto-capture"
+                value={settings.autoCapture}
+                onToggle={v => updateSettings({ autoCapture: v })}
+              />
+            )}
             <SheetRow
               label="Haptics"
               value={settings.haptics}
@@ -356,6 +463,14 @@ export default function CameraScreen() {
               value={settings.grid}
               onToggle={v => updateSettings({ grid: v })}
             />
+            {detectorState.kind === 'ready' && (
+              <Text style={styles.sheetMeta}>
+                Detection backend · {detectorState.detector.backendLabel()}
+              </Text>
+            )}
+            {detectorState.kind === 'unavailable' && (
+              <Text style={styles.sheetMeta}>On-device AI · {detectorState.reason}</Text>
+            )}
             <TouchableOpacity
               style={styles.sheetLink}
               onPress={() => {
@@ -382,6 +497,9 @@ export default function CameraScreen() {
     </View>
   );
 }
+
+const TINY_PLACEHOLDER =
+  'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8A//2Q==';
 
 function HudButton({
   icon,
@@ -468,7 +586,6 @@ function GridOverlay() {
 }
 
 function FauxPreview() {
-  // A quiet, cinematic fallback for web / no-permission state.
   return (
     <View style={{ flex: 1, backgroundColor: '#0a0a0a' }}>
       <View
@@ -493,12 +610,6 @@ function FauxPreview() {
           transform: [{ rotate: '20deg' }],
         }}
       />
-      <View style={styles.fauxLabel}>
-        <Ionicons name="videocam-off-outline" size={16} color={colors.textMuted} />
-        <Text style={styles.fauxText}>
-          Camera preview unavailable · UX simulation active
-        </Text>
-      </View>
     </View>
   );
 }
@@ -528,10 +639,25 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.sm,
   },
-  hudBtn: {
+  banner: {
+    marginTop: spacing.sm,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radii.pill,
-    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
+  bannerText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  hudBtn: { borderRadius: radii.pill, overflow: 'hidden' },
   hudBtnInner: {
     width: 38,
     height: 38,
@@ -571,11 +697,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(28,28,30,0.55)',
     gap: 6,
   },
-  chipText: {
-    color: colors.textPrimary,
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  chipText: { color: colors.textPrimary, fontSize: 11, fontWeight: '600' },
   opacityCol: {
     position: 'absolute',
     right: 8,
@@ -593,29 +715,17 @@ const styles = StyleSheet.create({
   slider: { width: 180, height: 40 },
   countdownWrap: {
     position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  countdown: {
-    color: colors.accent,
-    fontSize: 140,
-    fontWeight: '800',
-  },
-  bottomHud: {
-    position: 'absolute',
+    top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-  },
-  feedbackRow: {
     alignItems: 'center',
-    marginBottom: spacing.sm,
-    minHeight: 30,
+    justifyContent: 'center',
   },
-  carouselWrap: {
-    marginBottom: spacing.sm,
-  },
+  countdown: { color: colors.accent, fontSize: 140, fontWeight: '800' },
+  bottomHud: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  feedbackRow: { alignItems: 'center', marginBottom: spacing.sm, minHeight: 30 },
+  carouselWrap: { marginBottom: spacing.sm },
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -628,6 +738,20 @@ const styles = StyleSheet.create({
     height: 56,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  manualChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  manualChipText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    fontWeight: '700',
   },
   settingsBackdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -656,18 +780,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   sheetRowLabel: { color: colors.textPrimary, fontSize: 15 },
-  sw: {
-    width: 42,
-    height: 24,
-    borderRadius: 12,
-    padding: 2,
-  },
-  swKnob: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#fff',
-  },
+  sw: { width: 42, height: 24, borderRadius: 12, padding: 2 },
+  swKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
   sheetLink: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -677,31 +791,24 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   sheetLinkText: { color: colors.textPrimary, fontSize: 15 },
+  sheetMeta: {
+    color: colors.textMuted,
+    fontSize: 11,
+    paddingTop: spacing.sm,
+    paddingBottom: 4,
+  },
   gridLine: {
     position: 'absolute',
-    left: 0, right: 0,
+    left: 0,
+    right: 0,
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
   gridLineV: {
     position: 'absolute',
-    top: 0, bottom: 0,
+    top: 0,
+    bottom: 0,
     width: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  fauxLabel: {
-    position: 'absolute',
-    top: 56,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  fauxText: { color: colors.textMuted, fontSize: 11 },
 });

@@ -235,11 +235,11 @@ const styles = StyleSheet.create({
   imgFallback: { flex: 1, backgroundColor: '#111' },
   modePills: {
     position: 'absolute',
-    bottom: spacing.md,
+    top: spacing.sm,
     alignSelf: 'center',
     flexDirection: 'row',
     gap: spacing.xs,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     padding: 4,
     borderRadius: radii.pill,
     borderWidth: 1,

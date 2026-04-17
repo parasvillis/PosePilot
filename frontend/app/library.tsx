@@ -67,9 +67,11 @@ export default function Library() {
   );
 }
 
+const ART_H = CARD_H * 0.58;
+
 function PoseArt({ template }: { template: PoseTemplate }) {
   const w = CARD_W - 24;
-  const h = CARD_H * 0.6;
+  const h = ART_H - 16;
   const p = template.pose;
   const x = (i: number) => p.keypoints[i].x * w;
   const y = (i: number) => p.keypoints[i].y * h;
@@ -153,7 +155,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   cardArt: {
-    flex: 1,
+    height: ART_H,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#111',
