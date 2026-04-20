@@ -18,6 +18,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 
 import { colors, spacing, radii, typography } from '../src/theme';
 import { POSE_TEMPLATES, getTemplateById } from '../src/pose/templates';
+import { SceneId, SCENES } from '../src/pose/scenes';
+import { createWebSceneDetector, SceneDetector } from '../src/pose/sceneDetector';
 import { createPoseDetector } from '../src/pose/factory';
 import { PoseDetector } from '../src/pose/detector';
 import { matchPoses, MIN_KP_CONF } from '../src/pose/matcher';
@@ -30,8 +32,9 @@ import {
   DEFAULT_SETTINGS,
 } from '../src/storage/gallery';
 import PoseOverlay from '../src/components/PoseOverlay';
+import PoseSilhouette from '../src/components/PoseSilhouette';
 import ScoreMeter from '../src/components/ScoreMeter';
-import PoseCarousel from '../src/components/PoseCarousel';
+import PoseDrawer from '../src/components/PoseDrawer';
 import FeedbackToast from '../src/components/FeedbackToast';
 import CaptureButton from '../src/components/CaptureButton';
 
@@ -55,6 +58,9 @@ export default function CameraScreen() {
     (typeof params.pose === 'string' && params.pose) || POSE_TEMPLATES[0].id,
   );
   const [detectorState, setDetectorState] = useState<DetectorState>({ kind: 'loading' });
+  const [scene, setScene] = useState<SceneId>('generic');
+  const [sceneConfidence, setSceneConfidence] = useState(0);
+  const sceneDetectorRef = useRef<SceneDetector | null>(null);
   const [score, setScore] = useState(0);
   const [hasPose, setHasPose] = useState(false);
   const [ready, setReady] = useState(false);
@@ -122,7 +128,7 @@ export default function CameraScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // On web, mount the detector's <video> into our host
+  // On web, mount the detector's <video> into our host + start scene detection
   useEffect(() => {
     if (!IS_WEB) return;
     if (detectorState.kind !== 'ready') return;
@@ -132,6 +138,26 @@ export default function CameraScreen() {
     if (det && typeof det.mountInto === 'function') {
       det.mountInto(host);
     }
+
+    // Start MobileNet scene classifier on the same video element.
+    let cancelled = false;
+    (async () => {
+      const getVideo = () =>
+        (typeof det.getVideoElement === 'function' ? det.getVideoElement() : null) as HTMLVideoElement | null;
+      const sd = await createWebSceneDetector(getVideo, 2000);
+      if (cancelled) return;
+      sd.onScene(({ scene: s, confidence }) => {
+        setScene(s);
+        setSceneConfidence(confidence);
+      });
+      await sd.start();
+      sceneDetectorRef.current = sd;
+    })();
+    return () => {
+      cancelled = true;
+      sceneDetectorRef.current?.stop();
+      sceneDetectorRef.current = null;
+    };
   }, [detectorState]);
 
   // Matching loop — ~20Hz
@@ -272,13 +298,14 @@ export default function CameraScreen() {
       {/* Grid */}
       {settings.grid && <GridOverlay />}
 
-      {/* Ghost target pose */}
-      <PoseOverlay
+      {/* Ghost target pose — full silhouette (Huawei-style) */}
+      <PoseSilhouette
         pose={target}
         width={SCREEN_W}
         height={SCREEN_H}
         opacity={settings.overlayOpacity}
         stroke={colors.textPrimary}
+        limbWidth={Math.max(18, SCREEN_W * 0.055)}
         dashed
       />
 
@@ -410,9 +437,18 @@ export default function CameraScreen() {
         </View>
 
         <View style={styles.carouselWrap}>
-          <PoseCarousel
+          <PoseDrawer
             selectedId={selectedPoseId}
             onSelect={id => setSelectedPoseId(id)}
+            scene={scene}
+            sceneConfidence={sceneConfidence}
+            onOpenLibrary={() => router.push('/library')}
+            onDeepPose={() => {
+              // Deep Pose v2: full AI scene analysis via Gemini Vision.
+              // Currently gated — flip settings.useAI to call the real API.
+              setHint('Deep Pose lights up in final testing');
+              setTimeout(() => setHint(null), 2500);
+            }}
           />
         </View>
 

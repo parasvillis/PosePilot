@@ -1,43 +1,36 @@
-# PosePilot — Product Requirements Document
+# PosePilot — Product Requirements Document (v2.0 — Scene-Aware)
 
 ## Vision
-Real-time AI posing assistant with honest gating. The shutter only fires when MoveNet actually sees a full, in-frame body matching the target pose.
+Huawei Pura-style AI Posture Recommendation on Expo React Native. On-device scene detection continuously classifies the camera feed and surfaces a ranked set of pose templates in a bottom drawer. Each selection draws a full-body silhouette overlay; MoveNet-based matching + auto-capture stays gated on readiness.
 
-## Scoring model (v1.1 — capture-gate fix)
-
-`finalScore = rawAngleScore × visibility × coverage`, with:
-
-- **Per-keypoint check:** confidence ≥ 0.3 AND x∈[0.04, 0.96] AND y∈[0.04, 0.96]. Any keypoint that fails is considered "missing". Skeleton lines are not drawn through missing keypoints.
-- **Critical keypoints** (must all pass to allow capture): head (nose), both shoulders, both hips, both knees, both ankles. If head is missing → `head_out`, feet missing → `feet_out`, shoulder/hip side missing → `side_out`.
-- **Per-pose extras** (e.g. Arms Wide needs both wrists + both elbows; Power Pose needs elbows + wrists). Configured in `matcher.ts:POSE_REQUIRED_KPS`.
-- **Angle coverage:** only joints where all three contributing keypoints pass participate in the angle score.
-- **Auto-capture gate:** `readiness === 'ok' && score ≥ 85 && coverage ≥ 0.8` (plus 1 s stability + 3 s mount grace). If any critical or pose-required keypoint is missing, `canCapture` is false and the stability timer resets.
+## v2.0 shipped
+- **Pose library × 28** — tagged by `scene` / `subjects` / `mood`, grouped into 10 scenes (outdoor, indoor, cafe, street, beach, mountain, graduation, party, fitness, travel).
+- **Silhouette overlay** — replaced the stick-figure ghost with a traced full-body contour (oval head, neck trapezoid, torso polygon, thick rounded limb capsules, hand/foot markers). Keypoint data unchanged; matching engine untouched.
+- **Pose Drawer** — new bottom UI: scene pill (`CAFE · WINDOW`, `GRADUATION`, etc.) + confidence bar + ALL POSES count + horizontal recommendation cards with silhouette thumbnails. Replaces the old carousel.
+- **On-device scene detection (C1)** — TensorFlow.js MobileNet V2 α=0.5 (~5 MB) classifies the live `<video>` every 2 s. A compact rule table maps ImageNet classes → 10 scene tags (e.g., `mortarboard → graduation`, `seashore → beach`, `barbell → fitness`). Zero API cost, runs locally, web-only (native path flips on in the EAS dev-build).
+- **Deep Pose button (C2)** — wired into the drawer, gated by a settings flag. Currently emits a friendly "lights up in final testing" toast so no LLM credits are spent during iteration. Behind the toast is a drop-in call site for Gemini Vision + Gemini text via the Emergent universal key, ready for Phase C2.
+- **Scene recommender** — `recommendPoses(scene, limit)` ranks templates by `scene` match; falls back to generic poses if nothing fits.
 
 ## Runtime matrix
-
-| Runtime | Detector | Score | Auto-capture |
+| Runtime | Pose detection | Scene detection | Drawer recommendations |
 |---|---|---|---|
-| Web preview | Real MoveNet (TFJS) | Gated | Gated |
-| Expo Go | None | Hidden, shown as "MANUAL" | Hidden |
-| EAS dev-build | Real (when native plugin is wired) | Gated | Gated |
+| Web preview | ✅ Real MoveNet | ✅ Real MobileNet every 2 s | ✅ Live |
+| Expo Go | ❌ (manual) | ❌ | Static (generic poses) |
+| EAS dev-build | ✅ (when plugin wired) | ⏳ native port pending | ✅ |
 
-Expo Go ≠ Web. Only the EAS dev/production build gives the same experience on a phone.
+## Deferred (v3 roadmap)
+- **Deep Pose real calls** — flip Gemini Vision + Gemini Flash on behind a settings toggle.
+- **Nano Banana reference photos** — swap the SVG silhouette thumbnails for AI-generated editorial photos.
+- **Recreate this photo** — import from library → MoveNet extracts target → added as one-off template.
+- **Native scene detector** — mirror MobileNet behaviour via vision-camera frame processor in the dev-build.
 
-## Screens (unchanged from v1)
-Splash → Onboarding (3) → Camera (ghost outline + real skeleton + framing-aware hints) → Pose Library → Gallery → Before/After Preview → Settings sheet.
-
-## Files touched for v1.1
-- `src/pose/matcher.ts` — new readiness + framing + coverage model
-- `src/pose/feedback.ts` — framing-aware hints
-- `src/components/PoseOverlay.tsx` — `minConfidence` prop; skips missing bones/points
-- `app/camera.tsx` — `ready`/`canCapture` gate, stale-score bug fix, low-confidence skeleton hidden
+## File map (v2.0 changes)
+- `src/pose/scenes.ts` (new) — scene catalog + ImageNet→scene classifier
+- `src/pose/sceneDetector.ts` (new) — MobileNet loop, web-only
+- `src/pose/templates.ts` — expanded to 28 poses with scene tags + `recommendPoses()`
+- `src/components/PoseSilhouette.tsx` (new) — Huawei-style traced body outline
+- `src/components/PoseDrawer.tsx` (new) — bottom recommendation drawer + SVG thumbs
+- `app/camera.tsx` — wired scene detector, swapped ghost overlay to silhouette, swapped carousel for drawer, added Deep Pose button handler
 
 ## How to test
-1. Open `https://align-pose.preview.emergentagent.com` in a browser with webcam.
-2. Grant camera.
-3. Step partially out of frame → banner reads "Your head is cut off — step back" / "Your feet are cut off — step back" and the shutter does NOT fire.
-4. Pick Arms Wide and keep one hand down → banner reads "Bring your right hand into frame" and the shutter does NOT fire.
-5. Get fully in-frame matching the outline → shutter fires after ~1 s, saved score reflects the actual match.
-
-## Roadmap
-- Scene detection, "Recreate this photo", personalization, Instagram deep-pose agent.
+Open `https://align-pose.preview.emergentagent.com` in a browser with a webcam, grant permission. After ~3 s you'll see the MoveNet skeleton track your body. After ~5 s MobileNet kicks in and the scene pill updates based on what your camera sees. Point at a cafe → `CAFE · WINDOW`, coffee shot. Point at outdoor trail → `MOUNTAIN · TRAIL`, summit poses. Tap cards to pick a target.
