@@ -32,11 +32,12 @@ import {
   DEFAULT_SETTINGS,
 } from '../src/storage/gallery';
 import PoseOverlay from '../src/components/PoseOverlay';
-import PoseSilhouette from '../src/components/PoseSilhouette';
+import PoseCurveOverlay from '../src/components/PoseCurveOverlay';
 import ScoreMeter from '../src/components/ScoreMeter';
 import PoseDrawer from '../src/components/PoseDrawer';
 import FeedbackToast from '../src/components/FeedbackToast';
 import CaptureButton from '../src/components/CaptureButton';
+import { coach, CoachAdvice } from '../src/pose/coach';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const IS_WEB = Platform.OS === 'web';
@@ -65,6 +66,8 @@ export default function CameraScreen() {
   const [hasPose, setHasPose] = useState(false);
   const [ready, setReady] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  const [subHint, setSubHint] = useState<string | null>(null);
+  const [modeLabel, setModeLabel] = useState('FRAMING');
   const [worstJoints, setWorstJoints] = useState<Set<string>>(new Set());
   const [capturing, setCapturing] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -298,31 +301,26 @@ export default function CameraScreen() {
       {/* Grid */}
       {settings.grid && <GridOverlay />}
 
-      {/* Ghost target pose — full silhouette (Huawei-style) */}
-      <PoseSilhouette
+      {/* Ghost target pose — elegant curved line diagram (Huawei-style, smoothed) */}
+      <PoseCurveOverlay
         pose={target}
         width={SCREEN_W}
         height={SCREEN_H}
-        opacity={settings.overlayOpacity}
+        opacity={settings.overlayOpacity * 0.8}
         stroke={colors.textPrimary}
-        limbWidth={Math.max(18, SCREEN_W * 0.055)}
+        strokeWidth={2}
         dashed
       />
 
-      {/* Detected user pose — only when real detection is running.
-          minConfidence filters out keypoints MoveNet isn't sure about,
-          so we never draw skeleton lines through empty space. */}
+      {/* Detected user pose — elegant curves following the user's body */}
       {hasML && currentUserPose && (
-        <PoseOverlay
+        <PoseCurveOverlay
           pose={currentUserPose}
           width={SCREEN_W}
           height={SCREEN_H}
-          opacity={0.9}
-          stroke={locked ? colors.success : ready ? colors.accent : 'rgba(255,214,10,0.5)'}
-          dashed={false}
-          showPoints
-          highlight={worstJoints}
-          mirrored={false}
+          opacity={0.92}
+          stroke={ready ? colors.success : colors.accent}
+          strokeWidth={2.6}
           minConfidence={MIN_KP_CONF}
         />
       )}
@@ -336,9 +334,9 @@ export default function CameraScreen() {
             testID="open-library"
           />
           <View style={styles.centerPill}>
-            <View style={[styles.dot, { backgroundColor: locked ? colors.success : colors.accent }]} />
+            <View style={[styles.dot, { backgroundColor: ready ? colors.success : colors.accent }]} />
             <Text style={styles.centerPillText}>
-              {getTemplateById(selectedPoseId).name.toUpperCase()}
+              {hasML ? modeLabel : getTemplateById(selectedPoseId).name.toUpperCase()}
             </Text>
           </View>
           <HudButton
@@ -426,14 +424,15 @@ export default function CameraScreen() {
           <FeedbackToast
             message={
               hasML
-                ? locked
-                  ? scoreLabel(score)
-                  : hasPose
-                    ? hint
-                    : 'Step into frame'
+                ? hasPose
+                  ? hint ?? (ready ? 'You look great — hold it' : null)
+                  : 'Step into frame'
                 : 'Align your body with the outline'
             }
           />
+          {!!subHint && hasML && hasPose && (
+            <Text style={styles.subHint}>{subHint}</Text>
+          )}
         </View>
 
         <View style={styles.carouselWrap}>
@@ -766,7 +765,14 @@ const styles = StyleSheet.create({
   },
   countdown: { color: colors.accent, fontSize: 140, fontWeight: '800' },
   bottomHud: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  feedbackRow: { alignItems: 'center', marginBottom: spacing.sm, minHeight: 30 },
+  feedbackRow: { alignItems: 'center', marginBottom: spacing.sm, minHeight: 50, gap: 4 },
+  subHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    paddingHorizontal: spacing.md,
+  },
   carouselWrap: { marginBottom: spacing.sm },
   controls: {
     flexDirection: 'row',
