@@ -1,63 +1,43 @@
 # PosePilot — Product Requirements Document
 
 ## Vision
-Real-time AI posing assistant: overlays a "ghost pose" on the live camera, detects the user's body on-device, compares to a target pose (angle-based matching), provides minimal textual hints, and auto-captures at ≥ 85 % match held 1 s.
+Real-time AI posing assistant with honest gating. The shutter only fires when MoveNet actually sees a full, in-frame body matching the target pose.
 
-Tagline: **Never look awkward in photos again.**
+## Scoring model (v1.1 — capture-gate fix)
 
-## Current build — what is real, what is not
+`finalScore = rawAngleScore × visibility × coverage`, with:
 
-| Runtime | Detector | Score | Auto-capture | User-pose overlay |
-|---|---|---|---|---|
-| **Web preview** (any modern browser) | ✅ **Real** — TensorFlow.js MoveNet SinglePose Lightning over webcam via `getUserMedia` | Real, scale/position invariant (angle-based) | Real, at 85 % for 1 s | Real accent-colored skeleton |
-| **Expo Go** (iOS/Android) | ❌ Not available — Expo Go can't load native ML | N/A — "MANUAL" chip shown | Hidden | Not drawn |
-| **EAS dev-build** (iOS/Android) | ✅ Available when `react-native-vision-camera` + a pose plugin are installed per `/app/BUILD_NATIVE.md` | Real | Real | Real |
+- **Per-keypoint check:** confidence ≥ 0.3 AND x∈[0.04, 0.96] AND y∈[0.04, 0.96]. Any keypoint that fails is considered "missing". Skeleton lines are not drawn through missing keypoints.
+- **Critical keypoints** (must all pass to allow capture): head (nose), both shoulders, both hips, both knees, both ankles. If head is missing → `head_out`, feet missing → `feet_out`, shoulder/hip side missing → `side_out`.
+- **Per-pose extras** (e.g. Arms Wide needs both wrists + both elbows; Power Pose needs elbows + wrists). Configured in `matcher.ts:POSE_REQUIRED_KPS`.
+- **Angle coverage:** only joints where all three contributing keypoints pass participate in the angle score.
+- **Auto-capture gate:** `readiness === 'ok' && score ≥ 85 && coverage ≥ 0.8` (plus 1 s stability + 3 s mount grace). If any critical or pose-required keypoint is missing, `canCapture` is false and the stability timer resets.
 
-There is **no simulated "converging animation" detector** anywhere in the code. If real ML isn't running, the UI honestly says so and falls back to manual-align mode (ghost outline + manual shutter).
+## Runtime matrix
 
-## v1 Scope (delivered)
-1. **Onboarding (3 screens)** — Point / Align / Capture with dashed pose illustrations. Persists via AsyncStorage.
-2. **Camera** — Full-bleed preview (webcam on web via managed `<video>`; `expo-camera` on native), ghost target outline, live user-pose overlay (when ML active), pose name pill, front/rear toggle, timer (off/3s/5s), auto-capture toggle (only visible when ML active), opacity slider, settings sheet, haptics, grid.
-3. **Pose library** — 10 templates (Casual Stand, Hands in Pockets, Arms Wide, Leaning, Walking Shot, Sitting Cafe, Back Shot, Hand on Chin, Hand Through Hair, Power Pose) as MoveNet-format 17-keypoint JSON.
-4. **Matching engine** — Weighted joint-angle comparison (elbows, shoulders, hips, knees, neck). 0–100 score + per-joint diffs.
-5. **Feedback engine** — Max one hint per tick ("Step slightly right", "Raise your chin", etc.). Red highlights on misaligned joints.
-6. **Auto-capture** — 3-second grace on mount, score ≥ 85 held 1 s → shutter + haptic + gallery save.
-7. **Gallery** — AsyncStorage-backed, 3-col grid, score badge.
-8. **Before/After preview** — Toggle between final photo and overlaid skeletons (user vs target). Share + delete.
-9. **Settings** — Auto-capture (when ML), haptics, grid, overlay opacity, timer.
+| Runtime | Detector | Score | Auto-capture |
+|---|---|---|---|
+| Web preview | Real MoveNet (TFJS) | Gated | Gated |
+| Expo Go | None | Hidden, shown as "MANUAL" | Hidden |
+| EAS dev-build | Real (when native plugin is wired) | Gated | Gated |
 
-## Architecture
-- `/src/pose/detector.ts` — `PoseDetector` interface + `CreateDetectorResult` factory result.
-- `/src/pose/factory.ts` — Platform-aware factory (dynamic imports).
-- `/src/pose/webDetector.ts` — Real TFJS MoveNet + getUserMedia + captureFrameDataURL.
-- `/src/pose/nativeDetector.ts` — Stub; replace with vision-camera frame processor (see BUILD_NATIVE.md).
-- `/src/pose/templates.ts` — 10 poses in 17-keypoint JSON.
-- `/src/pose/matcher.ts` — Angle-based weighted matching.
-- `/src/pose/feedback.ts` — Hint generation.
-- `/src/components/*` — PoseOverlay, ScoreMeter, PoseCarousel, FeedbackToast, CaptureButton.
-- `/src/storage/gallery.ts` — AsyncStorage for captures, onboarding flag, settings.
+Expo Go ≠ Web. Only the EAS dev/production build gives the same experience on a phone.
+
+## Screens (unchanged from v1)
+Splash → Onboarding (3) → Camera (ghost outline + real skeleton + framing-aware hints) → Pose Library → Gallery → Before/After Preview → Settings sheet.
+
+## Files touched for v1.1
+- `src/pose/matcher.ts` — new readiness + framing + coverage model
+- `src/pose/feedback.ts` — framing-aware hints
+- `src/components/PoseOverlay.tsx` — `minConfidence` prop; skips missing bones/points
+- `app/camera.tsx` — `ready`/`canCapture` gate, stale-score bug fix, low-confidence skeleton hidden
 
 ## How to test
+1. Open `https://align-pose.preview.emergentagent.com` in a browser with webcam.
+2. Grant camera.
+3. Step partially out of frame → banner reads "Your head is cut off — step back" / "Your feet are cut off — step back" and the shutter does NOT fire.
+4. Pick Arms Wide and keep one hand down → banner reads "Bring your right hand into frame" and the shutter does NOT fire.
+5. Get fully in-frame matching the outline → shutter fires after ~1 s, saved score reflects the actual match.
 
-### A. Web preview (real ML)
-1. Open `https://align-pose.preview.emergentagent.com` in a browser on a laptop/phone.
-2. **Grant camera permission** when prompted.
-3. You should see your webcam feed + the dashed ghost outline.
-4. Within ~2–4 s the "Loading pose model…" banner disappears and an accent-yellow skeleton appears over you (that's the real MoveNet output).
-5. Pick a pose from the bottom carousel. The score at the bottom-right shows the real match.
-6. Mirror the outline — score climbs; at ≥ 85 held 1 s the app auto-shoots.
-
-### B. Expo Go (manual align)
-Open the QR code from `expo start` in Expo Go → grant camera → you'll see the real camera feed + ghost outline + a **"Manual align mode"** banner. No fake score, no auto-capture. Press the shutter when you're happy; photo saves to gallery.
-
-### C. EAS dev-build (full native ML)
-Follow `/app/BUILD_NATIVE.md` — exact commands for `eas build --profile development` with `react-native-vision-camera` + a MediaPipe pose plugin.
-
-## Not in v1 (Roadmap)
-- Scene detection (beach, cafe, street, mountain)
-- "Recreate this photo" (upload → extract keypoints → match)
-- Personalization (height, proportions)
-- Instagram / Pinterest deep-pose agent
-
-## Tech stack
-Expo SDK 54 · Expo Router 6 · React 19 · react-native-svg · react-native-reanimated · @react-native-community/slider · expo-camera · expo-haptics · AsyncStorage · @tensorflow/tfjs · @tensorflow-models/pose-detection (MoveNet).
+## Roadmap
+- Scene detection, "Recreate this photo", personalization, Instagram deep-pose agent.

@@ -1,36 +1,40 @@
 import { Pose, KP } from './keypoints';
-import { JointDiff, MatchResult } from './matcher';
+import { MatchResult, MIN_KP_CONF } from './matcher';
 
 /**
- * Generates at most 1 short textual hint based on the worst-misaligned joint
- * and positional deltas between user and target. Kept intentionally simple —
- * the design guideline is "max 1-2 hints at a time".
+ * Generates at most one short hint based on readiness + worst joint.
+ * Prioritizes framing/visibility issues over fine joint tuning.
  */
 export function generateHint(user: Pose, target: Pose, match: MatchResult): string | null {
-  if (!match.worstJoint) return null;
+  // Framing/visibility issues win — user can't improve joint angles
+  // until they're fully in frame.
+  if (match.missingDescription) return match.missingDescription;
+
   if (match.score >= 85) return null;
 
-  // Broad directional nudges on torso alignment first
-  const uShoulderMid = midpoint(user.keypoints[KP.LEFT_SHOULDER], user.keypoints[KP.RIGHT_SHOULDER]);
-  const tShoulderMid = midpoint(target.keypoints[KP.LEFT_SHOULDER], target.keypoints[KP.RIGHT_SHOULDER]);
-  const dx = tShoulderMid.x - uShoulderMid.x;
-  const dy = tShoulderMid.y - uShoulderMid.y;
-
-  if (Math.abs(dx) > 0.08) {
-    return dx > 0 ? 'Step slightly right' : 'Step slightly left';
-  }
-  if (Math.abs(dy) > 0.08) {
-    return dy > 0 ? 'Move camera up a bit' : 'Move camera down a bit';
+  // Torso/camera position nudge
+  const uL = user.keypoints[KP.LEFT_SHOULDER];
+  const uR = user.keypoints[KP.RIGHT_SHOULDER];
+  const tL = target.keypoints[KP.LEFT_SHOULDER];
+  const tR = target.keypoints[KP.RIGHT_SHOULDER];
+  if (uL.score >= MIN_KP_CONF && uR.score >= MIN_KP_CONF) {
+    const uMid = { x: (uL.x + uR.x) / 2, y: (uL.y + uR.y) / 2 };
+    const tMid = { x: (tL.x + tR.x) / 2, y: (tL.y + tR.y) / 2 };
+    const dx = tMid.x - uMid.x;
+    const dy = tMid.y - uMid.y;
+    if (Math.abs(dx) > 0.08) return dx > 0 ? 'Step slightly right' : 'Step slightly left';
+    if (Math.abs(dy) > 0.08) return dy > 0 ? 'Move camera up a bit' : 'Move camera down a bit';
   }
 
   const w = match.worstJoint;
+  if (!w) return 'Match the outline';
   switch (w.name) {
     case 'left_elbow':
     case 'right_elbow':
       return 'Adjust your elbow angle';
     case 'left_shoulder':
     case 'right_shoulder':
-      return 'Relax your shoulder';
+      return 'Relax your shoulders';
     case 'left_hip':
     case 'right_hip':
       return 'Shift your hips';
@@ -42,10 +46,6 @@ export function generateHint(user: Pose, target: Pose, match: MatchResult): stri
     default:
       return 'Match the outline';
   }
-}
-
-function midpoint(a: { x: number; y: number }, b: { x: number; y: number }) {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
 export function scoreLabel(score: number): string {
@@ -60,9 +60,4 @@ export function scoreColor(score: number, accent: string, success: string, muted
   if (score >= 85) return success;
   if (score >= 50) return accent;
   return muted;
-}
-
-export function joinsOutOfLine(match: MatchResult, threshold = 0.25): string[] {
-  // diff is in radians; 0.25 rad ~ 14deg
-  return match.jointDiffs.filter(d => d.diff > threshold).map(d => d.name);
 }

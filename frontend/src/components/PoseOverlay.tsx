@@ -15,6 +15,8 @@ type Props = {
   showPoints?: boolean;
   /** Whether to mirror horizontally (for front camera). */
   mirrored?: boolean;
+  /** Minimum keypoint confidence to render. Defaults to 0 (always render — for target poses). */
+  minConfidence?: number;
 };
 
 export default function PoseOverlay({
@@ -27,7 +29,11 @@ export default function PoseOverlay({
   highlight,
   showPoints = true,
   mirrored = false,
+  minConfidence = 0,
 }: Props) {
+  const kpVisible = (idx: number) =>
+    (pose.keypoints[idx]?.score ?? 0) >= minConfidence;
+
   const toXY = (idx: number) => {
     const k = pose.keypoints[idx];
     const x = mirrored ? (1 - k.x) * width : k.x * width;
@@ -35,7 +41,8 @@ export default function PoseOverlay({
     return { x, y };
   };
 
-  // Head circle derived from ear/eye keypoints
+  // Head circle — only if ears/eyes detected confidently
+  const headVisible = kpVisible(KP.LEFT_EAR) && kpVisible(KP.RIGHT_EAR);
   const le = toXY(KP.LEFT_EAR);
   const re = toXY(KP.RIGHT_EAR);
   const headCx = (le.x + re.x) / 2;
@@ -50,18 +57,20 @@ export default function PoseOverlay({
       pointerEvents="none"
     >
       <G opacity={opacity}>
-        {/* Head */}
-        <Circle
-          cx={headCx}
-          cy={headCy}
-          r={headR}
-          stroke={stroke}
-          strokeWidth={2}
-          strokeDasharray={dashed ? '6,6' : undefined}
-          fill="none"
-        />
-        {/* Bones */}
+        {headVisible && (
+          <Circle
+            cx={headCx}
+            cy={headCy}
+            r={headR}
+            stroke={stroke}
+            strokeWidth={2}
+            strokeDasharray={dashed ? '6,6' : undefined}
+            fill="none"
+          />
+        )}
+        {/* Bones — skip any edge where an endpoint is low-confidence */}
         {SKELETON.map(([a, b], i) => {
+          if (!kpVisible(a) || !kpVisible(b)) return null;
           const pa = toXY(a);
           const pb = toXY(b);
           return (
@@ -82,6 +91,7 @@ export default function PoseOverlay({
         {showPoints &&
           pose.keypoints.slice(5).map((_k, i) => {
             const idx = i + 5;
+            if (!kpVisible(idx)) return null;
             const { x, y } = toXY(idx);
             const isHot =
               highlight &&

@@ -20,7 +20,7 @@ import { colors, spacing, radii, typography } from '../src/theme';
 import { POSE_TEMPLATES, getTemplateById } from '../src/pose/templates';
 import { createPoseDetector } from '../src/pose/factory';
 import { PoseDetector } from '../src/pose/detector';
-import { matchPoses } from '../src/pose/matcher';
+import { matchPoses, MIN_KP_CONF } from '../src/pose/matcher';
 import { generateHint, scoreLabel } from '../src/pose/feedback';
 import {
   addCapture,
@@ -57,6 +57,7 @@ export default function CameraScreen() {
   const [detectorState, setDetectorState] = useState<DetectorState>({ kind: 'loading' });
   const [score, setScore] = useState(0);
   const [hasPose, setHasPose] = useState(false);
+  const [ready, setReady] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [worstJoints, setWorstJoints] = useState<Set<string>>(new Set());
   const [capturing, setCapturing] = useState(false);
@@ -172,11 +173,11 @@ export default function CameraScreen() {
     }, 50);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detectorState, target, settings.autoCapture, capturing, countdown]);
+  }, [detectorState, target, settings.autoCapture, capturing, countdown, selectedPoseId]);
 
   const currentUserPose = detectorState.kind === 'ready' ? detectorState.detector.currentPose() : null;
 
-  async function triggerCapture(auto = false) {
+  async function triggerCapture(auto = false, capturedScore?: number, capturedPose?: ReturnType<PoseDetector['currentPose']>) {
     if (capturing) return;
     if (!auto && settings.timer > 0) {
       for (let i = settings.timer; i > 0; i--) {
@@ -216,14 +217,16 @@ export default function CameraScreen() {
         uri = TINY_PLACEHOLDER;
       }
 
+      const poseAtCapture = capturedPose ?? currentUserPose;
+      const scoreAtCapture = capturedScore ?? score;
       const cap = {
         id: `cap_${Date.now()}`,
         poseId: selectedPoseId,
         poseName: getTemplateById(selectedPoseId).name,
         uri,
-        userPose: currentUserPose ? JSON.stringify(currentUserPose) : '',
+        userPose: poseAtCapture ? JSON.stringify(poseAtCapture) : '',
         createdAt: Date.now(),
-        score,
+        score: scoreAtCapture,
       };
       await addCapture(cap);
       if (settings.haptics && !IS_WEB) {
@@ -244,7 +247,7 @@ export default function CameraScreen() {
   }
 
   const hasML = detectorState.kind === 'ready';
-  const locked = hasML && score >= 85;
+  const locked = hasML && ready && score >= 85;
   const showNativeCamera =
     !IS_WEB && permission?.granted;
 
@@ -279,18 +282,21 @@ export default function CameraScreen() {
         dashed
       />
 
-      {/* Detected user pose — only when real detection is running */}
+      {/* Detected user pose — only when real detection is running.
+          minConfidence filters out keypoints MoveNet isn't sure about,
+          so we never draw skeleton lines through empty space. */}
       {hasML && currentUserPose && (
         <PoseOverlay
           pose={currentUserPose}
           width={SCREEN_W}
           height={SCREEN_H}
           opacity={0.9}
-          stroke={locked ? colors.success : colors.accent}
+          stroke={locked ? colors.success : ready ? colors.accent : 'rgba(255,214,10,0.5)'}
           dashed={false}
           showPoints
           highlight={worstJoints}
           mirrored={false}
+          minConfidence={MIN_KP_CONF}
         />
       )}
 
