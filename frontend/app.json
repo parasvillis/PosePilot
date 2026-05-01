@@ -14,7 +14,8 @@
         "NSCameraUsageDescription": "Align your body with the ghost pose overlay",
         "NSPhotoLibraryUsageDescription": "Save and review your PosePilot captures",
         "NSPhotoLibraryAddUsageDescription": "Save your PosePilot shots to Photos"
-      }
+      },
+      "bundleIdentifier": "com.parasvillis.frontend"
     },
     "android": {
       "adaptiveIcon": {
@@ -25,8 +26,12 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "package": "com.parasvillis.frontend"
     },
     "web": {
       "bundler": "metro",
@@ -47,6 +52,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a1bf9bee-a07e-42ce-a7d7-ecf960c24b56"
+      }
     }
   }
 }
